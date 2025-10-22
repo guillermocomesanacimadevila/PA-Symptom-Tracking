@@ -349,12 +349,17 @@ class XGBoostModel:
 # ------------------- PYTORCH MLP MODEL -------------------- #
 # ========================================================== #
 
+
 class TorchMLPModel:
-    def __init__(self, hidden_sizes: List[int] = [64, 32], dropout: float = 0.1, lr: float = 1e-3, weight_decay: float = 1e-4, batch_size: int = 64, epochs: int = 3, patience: int = 10, random_state: int = 42, device: Optional[str] = None):
-        if not _HAS_TORCH: raise ImportError("PyTorch not available. Install torch.")
-        self.hidden_sizes, self.dropout = hidden_sizes, dropout
-        self.lr, self.weight_decay = lr, weight_decay
-        self.batch_size, self.epochs, self.patience = batch_size, epochs, patience
+    def __init__(self, hidden_sizes: List[int] = [128, 64], dropout: float = 0.1, lr: float = 1e-3, weight_decay: float = 1e-4, batch_size: int = 64, epochs: int = 50, patience: int = 8, random_state: int = 42, device: Optional[str] = None):
+        if not _HAS_TORCH: raise ImportError("PyTorch not available.")
+        self.hidden_sizes = hidden_sizes
+        self.dropout = dropout
+        self.lr = lr
+        self.weight_decay = weight_decay
+        self.batch_size = batch_size
+        self.epochs = epochs
+        self.patience = patience
         self.random_state = random_state
         self.scaler = StandardScaler()
         self.medians: Optional[pd.Series] = None
@@ -362,6 +367,28 @@ class TorchMLPModel:
         self.fitted = False
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.net: Optional[nn.Module] = None
+
+    @classmethod
+    def from_config(cls, cfg: dict):
+        return cls(**cfg)
+
+    def get_params(self) -> dict:
+        return {
+            "hidden_sizes": self.hidden_sizes,
+            "dropout": self.dropout,
+            "lr": self.lr,
+            "weight_decay": self.weight_decay,
+            "batch_size": self.batch_size,
+            "epochs": self.epochs,
+            "patience": self.patience,
+            "random_state": self.random_state,
+            "device": self.device,
+        }
+
+    def set_params(self, **cfg):
+        for k, v in cfg.items():
+            if hasattr(self, k): setattr(self, k, v)
+        return self
 
     def _prepare(self, X: pd.DataFrame, fit_scaler: bool = False) -> np.ndarray:
         X = _numeric_df(X).astype(np.float32)
@@ -393,13 +420,11 @@ class TorchMLPModel:
         self.feat_cols = Xn.columns.tolist()
         Xp = self._prepare(Xn, fit_scaler=True)
         yp = np.asarray(y, dtype=np.float32).reshape(-1, 1)
-
         self.net = self._build_net(Xp.shape[1]).to(self.device)
         ds = TensorDataset(torch.from_numpy(Xp), torch.from_numpy(yp))
         loader = DataLoader(ds, batch_size=self.batch_size, shuffle=True)
         opt = torch.optim.Adam(self.net.parameters(), lr=self.lr, weight_decay=self.weight_decay)
         loss_fn = nn.MSELoss()
-
         best_loss, best_state, wait = float("inf"), None, 0
         for epoch in range(self.epochs):
             self.net.train()
@@ -416,7 +441,6 @@ class TorchMLPModel:
             else:
                 wait += 1
                 if wait >= self.patience: break
-
         if best_state: self.net.load_state_dict(best_state)
         self.fitted = True
         print(f"[TorchMLPModel] fitted | best_train_MSE={best_loss:.6f}")
@@ -443,16 +467,14 @@ class TorchMLPModel:
             "medians": self.medians,
             "feat_cols": self.feat_cols,
             "state_dict": {k: v.cpu().numpy() for k, v in self.net.state_dict().items()},
-            "hidden_sizes": self.hidden_sizes,
-            "dropout": self.dropout
+            "hparams": self.get_params(),
         }, path)
 
     def load(self, path: str):
         if not _HAS_TORCH: raise ImportError("PyTorch not available.")
         obj = joblib.load(path)
         self.scaler, self.medians, self.feat_cols = obj["scaler"], obj["medians"], obj["feat_cols"]
-        self.hidden_sizes = obj.get("hidden_sizes", self.hidden_sizes)
-        self.dropout = obj.get("dropout", self.dropout)
+        self.set_params(**obj.get("hparams", {}))
         self.net = self._build_net(len(self.feat_cols)).to(self.device)
         state = {k: torch.from_numpy(v) for k, v in obj["state_dict"].items()}
         self.net.load_state_dict(state)
