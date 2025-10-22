@@ -12,11 +12,11 @@ from utils import (
 )
 
 DATA_PATH = "../Data/Symptomtrackingdata_csv-cleaned_with_vars_ml_ready.csv"
-OUT_DIR   = "../grid_results"
+OUT_DIR = "../grid_results"
 ID_COL = "id"
 DAY_COL = "day"
 LABEL_COL = "Ystar_next_day"
-MODEL_LIST = ["lasso", "elasticnet", "rf", "svr", "knn", "xgb", "catboost"]
+MODEL_LIST = ["lasso", "elasticnet", "rf", "svr", "knn", "xgb", "catboost", "mlp"]
 warnings.filterwarnings("ignore", category=UserWarning)
 
 def main():
@@ -25,28 +25,26 @@ def main():
     train, val, test = split_by_id_time(df, id_col=ID_COL, day_col=DAY_COL, test_size=0.15, val_size=0.15)
     Xtr, ytr, feat_cols = build_feature_label_matrices(train, id_col=ID_COL, day_col=DAY_COL, label_col=LABEL_COL)
     Xva, yva, _ = build_feature_label_matrices(val, id_col=ID_COL, day_col=DAY_COL, label_col=LABEL_COL)
-    Xt,  yt,  _ = build_feature_label_matrices(test, id_col=ID_COL, day_col=DAY_COL, label_col=LABEL_COL)
+    Xt, yt, _ = build_feature_label_matrices(test, id_col=ID_COL, day_col=DAY_COL, label_col=LABEL_COL)
     Xcv = pd.concat([Xtr, Xva], axis=0).reset_index(drop=True)
     ycv = pd.concat([pd.Series(ytr), pd.Series(yva)], axis=0).to_numpy()
     os.makedirs(OUT_DIR, exist_ok=True)
     summaries = []
     for name in MODEL_LIST:
-        print(f"\n==========================")
+        print("\n==========================")
         print(f"Running model: {name.upper()}")
-        print(f"==========================")
+        print("==========================")
         try:
-            summary = run_grid_search(
-                model_name=name,
-                X=Xcv, y=ycv,
-                cv_splits=5,
-                out_dir=OUT_DIR,
-                refit_metric="r2"
-            )
+            summary = run_grid_search(model_name=name, X=Xcv, y=ycv, cv_splits=5, out_dir=OUT_DIR, refit_metric="r2")
         except ImportError as e:
             print(f"[{name}] skipped: {e}")
             continue
         best_path = summary["best_model_path"]
-        best_model = joblib.load(best_path)
+        if name == "mlp":
+            from models import TorchMLPModel
+            best_model = TorchMLPModel().load(best_path)
+        else:
+            best_model = joblib.load(best_path)
         yhat_test = best_model.predict(Xt)
         test_metrics = evaluate_regression(yt, yhat_test)
         row = {
