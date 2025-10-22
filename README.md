@@ -13,6 +13,15 @@ conda env create -f env/environment.yml && conda activate symptom-tracking
 ```
 
 ```bash
-cd Scripts/ && python run_all_models.py
+cd Scripts/ && chmod +x run_all_models.py && python run_all_models.py 
 ```
 
+# Changing directories
+
+```bash
+cd PA-Symptom-Tracking/Data && pwd && ls -lh
+```
+
+```bash
+cd ../Scripts && chmod +x run_all_models.py && python run_all_models.py 
+```
