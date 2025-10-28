@@ -1,39 +1,33 @@
 name: symptom-tracking
 channels:
+  - rapidsai
+  - nvidia
+  - pytorch
   - conda-forge
   - defaults
 dependencies:
-  - python=3.12
-  - numpy=2.0.2
-  - pandas=2.3.3
-  - matplotlib=3.9.4
-  - seaborn=0.13.2
-  - scikit-learn=1.6.1
-  - scipy=0.13.2
-  - xgboost=2.1.4
-  - plotly=6.3.1
-  - catboost=1.2.8
-  - tqdm=4.66
-  - pyyaml=6.0
-  - shap=0.49.1
-  - gitpython=3.1
-  - tifffile=2024.5
-  - opencv
+  - python=3.11
+  - rapids=24.08
+  - cuda-version=12.2
+  - pytorch
+  - pytorch-cuda=12.4
+  - numpy
+  - pandas
+  - scikit-learn
+  - matplotlib
+  - seaborn
+  - xgboost
+  - catboost
+  - plotly
+  - tqdm
+  - pyyaml
+  - gitpython
   - typing-extensions
-  - fontconfig
-  - scikit-learn=1.4
   - openjdk=17
   - ca-certificates
-  - nano
-  - less
-  - vim
-  - pytest
   - pip
   - pip:
       - configargparse==1.7
-      - torch==2.2.2
-      - torchvision==0.17.2
-      - torchaudio==2.2.2
       - dill==0.3.8
       - tensorboard==2.16.2
-      - imbalanced-learn==0.12.0
+      - shap
