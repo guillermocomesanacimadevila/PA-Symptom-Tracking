@@ -8,7 +8,9 @@ import numpy as np
 import pandas as pd
 from types import SimpleNamespace
 from typing import List, Tuple, Optional, Dict, Any
-from sklearn.model_selection import KFold, GridSearchCV, GroupKFold
+from contextlib import contextmanager
+from tqdm import tqdm
+from sklearn.model_selection import KFold, GridSearchCV, GroupKFold, ParameterGrid
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.pipeline import Pipeline as SkPipeline
 from sklearn.impute import SimpleImputer
@@ -207,10 +209,7 @@ class CuMLCompatRegressor(BaseEstimator, RegressorMixin):
         )
 
 def make_pipeline_and_grid(model_name: str, use_gpu: bool):
-    from models import (
-        LassoModel, ElasticNetModel, RandomForestModel,
-        XGBoostModel, SVRModel, KNNRegressorModel, CatBoostRegressorModel
-    )
+    from models import LassoModel, ElasticNetModel, RandomForestModel, XGBoostModel, SVRModel, KNNRegressorModel, CatBoostRegressorModel
     m = model_name.lower()
     if m == "lasso":
         if use_gpu and cuml_available():
@@ -237,54 +236,31 @@ def make_pipeline_and_grid(model_name: str, use_gpu: bool):
             est = cuRF(random_state=42)
             pre = SkPipeline([("imputer", SimpleImputer(strategy="median"))])
             pipe = CuMLCompatRegressor(pre, est)
-            grid = {
-                "model__n_estimators": [300, 600, 900, 1200, 1600],
-                "model__max_depth": [6, 10, 14, 18, 24, 32],
-                "model__max_features": [0.5, 0.7, 1.0],
-                "model__min_samples_leaf": [1, 2, 4, 8],
-            }
+            grid = {"model__n_estimators": [300, 900, 1600], "model__max_depth": [6, 14, 24], "model__max_features": [0.5, 0.7, 1.0], "model__min_samples_leaf": [1, 2, 4]}
             return pipe, grid
         pipe = RandomForestModel().sklearn_pipeline()
-        grid = {
-            "model__n_estimators": [300, 600, 900, 1200, 1600],
-            "model__max_depth": [None, 6, 10, 14, 18, 24],
-            "model__min_samples_leaf": [1, 2, 4, 8],
-            "model__min_samples_split": [2, 4, 8, 16],
-            "model__max_features": ["sqrt", "log2", 0.5, 0.7, 0.9],
-        }
+        grid = {"model__n_estimators": [300, 900, 1600], "model__max_depth": [None, 10, 18], "model__min_samples_leaf": [1, 2, 4], "model__min_samples_split": [2, 8, 16], "model__max_features": ["sqrt", "log2", 0.7]}
         return pipe, grid
     if m == "svr":
         if use_gpu and cuml_available():
             est = cuSVR()
             pre = SkPipeline([("imputer", SimpleImputer(strategy="median")), ("scaler", StandardScaler())])
             pipe = CuMLCompatRegressor(pre, est)
-            grid = {
-                "model__kernel": ["rbf", "linear"],
-                "model__C": [0.25, 0.5, 1.0, 2.0, 4.0, 8.0],
-                "model__epsilon": [0.05, 0.1, 0.2, 0.4, 0.8],
-                "model__gamma": ["scale", 0.01, 0.1, 1.0],
-            }
+            grid = {"model__kernel": ["rbf", "linear"], "model__C": [0.5, 1.0, 4.0], "model__epsilon": [0.05, 0.2, 0.4], "model__gamma": ["scale", 0.1]}
             return pipe, grid
         pipe = SVRModel().sklearn_pipeline()
-        grid = {
-            "model__kernel": ["rbf", "poly"],
-            "model__C": [0.25, 0.5, 1.0, 2.0, 4.0, 8.0],
-            "model__epsilon": [0.05, 0.1, 0.2, 0.4, 0.8],
-            "model__gamma": ["scale", "auto", 0.01, 0.1, 1.0],
-            "model__degree": [2, 3, 4],
-            "model__coef0": [0.0, 0.5, 1.0],
-        }
+        grid = {"model__kernel": ["rbf", "poly"], "model__C": [0.5, 1.0, 4.0], "model__epsilon": [0.05, 0.2, 0.4], "model__gamma": ["scale", "auto", 0.1], "model__degree": [2, 3], "model__coef0": [0.0, 0.5]}
         return pipe, grid
     if m == "knn":
         if use_gpu and cuml_available():
             est = cuKNN()
             pre = SkPipeline([("imputer", SimpleImputer(strategy="median")), ("scaler", StandardScaler())])
             pipe = CuMLCompatRegressor(pre, est)
-            grid = {"model__n_neighbors": [3, 5, 7, 9, 11, 15, 21, 31], "model__weights": ["uniform", "distance"], "model__p": [1, 2]}
+            grid = {"model__n_neighbors": [5, 9, 15, 31], "model__weights": ["uniform", "distance"], "model__p": [1, 2]}
             return pipe, grid
         from models import KNNRegressorModel
         pipe = KNNRegressorModel().sklearn_pipeline()
-        grid = {"model__n_neighbors": [3, 5, 7, 9, 11, 15, 21, 31], "model__weights": ["uniform", "distance"], "model__p": [1, 2], "model__metric": ["minkowski"]}
+        grid = {"model__n_neighbors": [5, 9, 15, 31], "model__weights": ["uniform", "distance"], "model__p": [1, 2], "model__metric": ["minkowski"]}
         return pipe, grid
     if m == "xgb":
         if not _safe_has_xgb():
@@ -293,16 +269,7 @@ def make_pipeline_and_grid(model_name: str, use_gpu: bool):
         predictor = "gpu_predictor" if use_gpu else "auto"
         est = XGBRegressor(objective="reg:squarederror", random_state=42, n_jobs=-1, tree_method=tree_method, predictor=predictor)
         pipe = SkPipeline([("imputer", SimpleImputer(strategy="median")), ("model", est)])
-        grid = {
-            "model__n_estimators": [400, 700, 1000, 1300, 1600],
-            "model__max_depth": [3, 5, 7, 9, 11],
-            "model__learning_rate": [0.01, 0.03, 0.05, 0.1, 0.2],
-            "model__subsample": [0.6, 0.8, 1.0],
-            "model__colsample_bytree": [0.6, 0.8, 1.0],
-            "model__min_child_weight": [1, 3, 5],
-            "model__reg_alpha": [0.0, 0.1, 0.5, 1.0, 2.0],
-            "model__reg_lambda": [0.5, 1.0, 1.5, 2.0, 3.0],
-        }
+        grid = {"model__n_estimators": [700, 1000, 1300], "model__max_depth": [3, 7, 11], "model__learning_rate": [0.03, 0.05, 0.1], "model__subsample": [0.6, 0.8, 1.0], "model__colsample_bytree": [0.6, 0.8, 1.0], "model__min_child_weight": [1, 3, 5], "model__reg_alpha": [0.0, 0.5, 1.0], "model__reg_lambda": [0.5, 1.0, 2.0]}
         return pipe, grid
     if m == "catboost":
         if not _safe_has_catboost():
@@ -310,15 +277,7 @@ def make_pipeline_and_grid(model_name: str, use_gpu: bool):
         task_type = "GPU" if use_gpu else "CPU"
         est = CatBoostRegressor(loss_function="RMSE", random_seed=42, task_type=task_type, verbose=False)
         pipe = SkPipeline([("imputer", SimpleImputer(strategy="median")), ("model", est)])
-        grid = {
-            "model__iterations": [600, 900, 1200, 1600],
-            "model__depth": [4, 6, 8, 10],
-            "model__learning_rate": [0.01, 0.03, 0.05, 0.1],
-            "model__l2_leaf_reg": [1.0, 3.0, 7.0, 12.0],
-            "model__subsample": [0.7, 0.85, 1.0],
-            "model__bagging_temperature": [0, 1, 3],
-            "model__random_strength": [1, 5, 10],
-        }
+        grid = {"model__iterations": [600, 900, 1200], "model__depth": [4, 6, 8], "model__learning_rate": [0.03, 0.05, 0.1], "model__l2_leaf_reg": [1.0, 3.0, 7.0], "model__subsample": [0.7, 0.85, 1.0], "model__bagging_temperature": [0, 1, 3], "model__random_strength": [1, 5, 10]}
         return pipe, grid
     raise ValueError(f"Unknown model_name: {model_name}")
 
@@ -334,21 +293,7 @@ def timeit(fn):
 def run_nn_grid(X: pd.DataFrame, y: np.ndarray, cv_splits: int = 5, out_dir: str = "../Data/grid_results", refit_metric: str = "r2", max_combos: int = 80) -> Dict[str, Any]:
     from models import TorchMLPModel
     os.makedirs(out_dir, exist_ok=True)
-    param_grid = {
-        "hidden_sizes": [(256,128), (128,64), (128,64,32), (64,32)],
-        "dropout": [0.0, 0.2, 0.4],
-        "use_batchnorm": [False, True],
-        "bn_momentum": [0.1, 0.01],
-        "lr": [1e-4, 3e-4, 1e-3],
-        "weight_decay": [0.0, 1e-6, 1e-5],
-        "batch_size": [32, 64, 128],
-        "epochs": [50],
-        "patience": [10],
-        "scheduler_type": ["none", "step", "cosine"],
-        "scheduler_step": [10, 20],
-        "scheduler_gamma": [0.8, 0.5],
-        "random_state": [42],
-    }
+    param_grid = {"hidden_sizes": [(256,128), (128,64), (128,64,32), (64,32)], "dropout": [0.0, 0.2, 0.4], "use_batchnorm": [False, True], "bn_momentum": [0.1, 0.01], "lr": [1e-4, 3e-4, 1e-3], "weight_decay": [0.0, 1e-6, 1e-5], "batch_size": [32, 64, 128], "epochs": [50], "patience": [10], "scheduler_type": ["none", "step", "cosine"], "scheduler_step": [10, 20], "scheduler_gamma": [0.8, 0.5], "random_state": [42]}
     keys, vals = zip(*param_grid.items())
     all_combos = [dict(zip(keys, v)) for v in itertools.product(*vals)]
     if len(all_combos) > max_combos:
@@ -384,16 +329,23 @@ def run_nn_grid(X: pd.DataFrame, y: np.ndarray, cv_splits: int = 5, out_dir: str
     best_model = TorchMLPModel.from_config(best_cfg).fit(X, y)
     best_pkl = os.path.join(out_dir, "mlp_best.pkl")
     best_model.save(best_pkl)
-    summary = {
-        "model": "mlp",
-        "use_gpu": gpu_available(),
-        "best_params": best_cfg,
-        "best_model_path": best_pkl,
-        "cv_results_csv": res_csv,
-        "score": round(best_score, 4),
-    }
+    summary = {"model": "mlp", "use_gpu": gpu_available(), "best_params": best_cfg, "best_model_path": best_pkl, "cv_results_csv": res_csv, "score": round(best_score, 4)}
     print(f"[mlp] best {refit_metric}={summary['score']:.3f} | GPU={summary['use_gpu']}")
     return summary
+
+@contextmanager
+def tqdm_joblib(tqdm_object):
+    class TqdmBatchCompletionCallback(joblib.parallel.BatchCompletionCallBack):
+        def __call__(self, *args, **kwargs):
+            tqdm_object.update(n=self.batch_size)
+            return super().__call__(*args, **kwargs)
+    old_callback = joblib.parallel.BatchCompletionCallBack
+    joblib.parallel.BatchCompletionCallBack = TqdmBatchCompletionCallback
+    try:
+        yield tqdm_object
+    finally:
+        joblib.parallel.BatchCompletionCallBack = old_callback
+        tqdm_object.close()
 
 def run_grid_search(model_name: str, X: pd.DataFrame, y: np.ndarray, groups: Optional[np.ndarray] = None, cv_splits: int = 5, out_dir: str = "../Data/grid_results", refit_metric: str = "r2") -> Dict[str, Any]:
     if model_name.lower() in ("mlp","nn","torchmlp"):
@@ -403,11 +355,15 @@ def run_grid_search(model_name: str, X: pd.DataFrame, y: np.ndarray, groups: Opt
     est, grid = make_pipeline_and_grid(model_name, use_gpu)
     scoring = {"mae": "neg_mean_absolute_error", "r2": "r2"}
     cv = GroupKFold(n_splits=cv_splits) if groups is not None else KFold(n_splits=cv_splits, shuffle=True, random_state=42)
+    n_cand = len(ParameterGrid(grid))
+    n_folds = cv_splits
+    total = n_cand * n_folds
     gs = GridSearchCV(estimator=est, param_grid=grid, scoring=scoring, refit=refit_metric, cv=cv, n_jobs=-1, verbose=0, return_train_score=False, error_score="raise")
-    if groups is not None:
-        gs.fit(X, y, groups=groups)
-    else:
-        gs.fit(X, y)
+    with tqdm_joblib(tqdm(total=total, desc=f"{model_name} CV", unit="fit")):
+        if groups is not None:
+            gs.fit(X, y, groups=groups)
+        else:
+            gs.fit(X, y)
     res_df = pd.DataFrame(gs.cv_results_)
     res_csv = os.path.join(out_dir, f"{model_name}_cv_results.csv")
     res_df.to_csv(res_csv, index=False)
@@ -418,17 +374,7 @@ def run_grid_search(model_name: str, X: pd.DataFrame, y: np.ndarray, groups: Opt
     std_mae  =  float(res_df.loc[bi, "std_test_mae"])
     mean_r2  =  float(res_df.loc[bi, "mean_test_r2"])
     std_r2   =  float(res_df.loc[bi, "std_test_r2"])
-    summary = {
-        "model": model_name,
-        "use_gpu": use_gpu,
-        "best_params": gs.best_params_,
-        "best_model_path": best_pkl,
-        "cv_results_csv": res_csv,
-        "MAE_mean": round(mean_mae, 4),
-        "MAE_sd": round(std_mae, 4),
-        "R2_mean": round(mean_r2, 4),
-        "R2_sd": round(std_r2, 4),
-    }
+    summary = {"model": model_name, "use_gpu": use_gpu, "best_params": gs.best_params_, "best_model_path": best_pkl, "cv_results_csv": res_csv, "MAE_mean": round(mean_mae, 4), "MAE_sd": round(std_mae, 4), "R2_mean": round(mean_r2, 4), "R2_sd": round(std_r2, 4)}
     print(f"[{model_name}] best R²={summary['R2_mean']:.3f} ± {summary['R2_sd']:.3f} | MAE={summary['MAE_mean']:.3f} ± {summary['MAE_sd']:.3f} | GPU={use_gpu}")
     return summary
 
