@@ -41,5 +41,5 @@ conda env create -f env/environment.yml && conda activate symptom-tracking
 ```
 
 ```bash
-cd ../Scripts && chmod +x test.py && python test.py 
+cd Scripts/ && chmod +x test.py && python test.py 
 ```
