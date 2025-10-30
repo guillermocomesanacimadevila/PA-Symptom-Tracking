@@ -26,7 +26,7 @@ cd PA-Symptom-Tracking/Data && pwd && ls -lh
 cd ../Scripts && chmod +x run_all_models.py && python run_all_models.py 
 ```
 
-### Test run
+# Test run
 
 ```bash
 git clone https://github.com/guillermocomesanacimadevila/PA-Symptom-Tracking.git
