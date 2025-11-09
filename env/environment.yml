@@ -1,14 +1,12 @@
 name: symptom-tracking
 channels:
-  - rapidsai
   - nvidia
   - pytorch
   - conda-forge
   - defaults
+
 dependencies:
-  - python=3.12
-  - rapids=24.08
-  - cuda-version=12.2
+  - python=3.11
   - pytorch
   - pytorch-cuda=12.4
   - numpy
@@ -25,9 +23,10 @@ dependencies:
   - typing-extensions
   - openjdk=17
   - ca-certificates
+  - joblib
+  - shap
   - pip
   - pip:
       - configargparse==1.7
       - dill==0.3.8
       - tensorboard==2.16.2
-      - shap
