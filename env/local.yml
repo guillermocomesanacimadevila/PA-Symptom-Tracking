@@ -1,0 +1,31 @@
+name: symptom-tracking
+channels:
+  - conda-forge
+  - pytorch
+  - defaults
+
+dependencies:
+  - python=3.11
+  - numpy<2.0
+  - pandas
+  - scikit-learn
+  - matplotlib
+  - seaborn
+  - pytorch
+  - xgboost
+  - catboost<=1.2.5
+  - shap<0.45
+  - tqdm
+  - pyyaml
+  - gitpython
+  - typing-extensions
+  - joblib
+  - plotly
+  - openjdk=17
+  - ca-certificates
+
+  - pip
+  - pip:
+      - configargparse==1.7
+      - dill==0.3.8
+      - tensorboard==2.16.2
