@@ -54,7 +54,7 @@ python bootstrap.py \
   --h_start 1 \
   --h_end 14 \
   --n_boot 2000 \
-  --out_csv ci_all_models.csv
+  --out_csv ../grid_results_horizons/ci_all_models.csv
 ```
 
 
