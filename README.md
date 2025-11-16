@@ -43,3 +43,18 @@ conda env create -f env/environment.yml && conda activate symptom-tracking
 ```bash
 cd Scripts/ && chmod +x test.py && python test.py 
 ```
+
+# Bootsraping
+
+
+```bash
+python bootstrap.py \
+  --pred_dir ../grid_results_horizons \
+  --models auto \
+  --h_start 1 \
+  --h_end 14 \
+  --n_boot 2000 \
+  --out_csv ci_all_models.csv
+```
+
+
