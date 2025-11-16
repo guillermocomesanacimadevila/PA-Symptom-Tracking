@@ -14,7 +14,7 @@ from sklearn.model_selection import KFold, GridSearchCV, GroupKFold, ParameterGr
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.pipeline import Pipeline as SkPipeline
 from sklearn.impute import SimpleImputer
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, FunctionTransformer
 from sklearn.base import BaseEstimator, RegressorMixin
 
 try:
@@ -156,12 +156,27 @@ def split_by_id_time(df: pd.DataFrame, id_col: str = ID_COL_DEFAULT, day_col: st
     print(f"[SPLIT] Rows train={len(train)} val={len(val)} test={len(test)}")
     return train, val, test
 
-def build_feature_label_matrices(df: pd.DataFrame, id_col: str = ID_COL_DEFAULT, day_col: str = DAY_COL_DEFAULT, label_col: str = LABEL_COL_DEFAULT, feature_cols: Optional[List[str]] = None) -> Tuple[pd.DataFrame, np.ndarray, List[str]]:
+def build_feature_label_matrices(df: pd.DataFrame,
+                                 id_col: str = ID_COL_DEFAULT,
+                                 day_col: str = DAY_COL_DEFAULT,
+                                 label_col: str = LABEL_COL_DEFAULT,
+                                 feature_cols: Optional[List[str]] = None) -> Tuple[pd.DataFrame, np.ndarray, List[str]]:
     if feature_cols is None:
         numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
         drop = {id_col, day_col, label_col}
-        feature_cols = [c for c in numeric_cols if c not in drop]
+        leak_prefixes = ("Y_next_h", "dY_next_h")
+        leak_exact = {"Ystar_next_day", "dY_next"}
+        feature_cols = []
+        for c in numeric_cols:
+            if c in drop:
+                continue
+            if any(c.startswith(p) for p in leak_prefixes):
+                continue
+            if c in leak_exact:
+                continue
+            feature_cols.append(c)
     X = df[feature_cols].copy()
+    X = X.apply(pd.to_numeric, errors="coerce")
     y = df[label_col].to_numpy().astype(float)
     return X, y, feature_cols
 
@@ -170,6 +185,25 @@ def evaluate_regression(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, flo
     rmse = math.sqrt(mean_squared_error(y_true, y_pred))
     r2 = r2_score(y_true, y_pred)
     return {"MAE": mae, "RMSE": rmse, "R2": r2}
+
+def metric_ci_from_mean_sd(mean: float, sd: float, n: int, level: float = 0.95) -> Dict[str, float]:
+    if n <= 1 or not np.isfinite(sd):
+        return {
+            "mean": float(mean),
+            "sd": float(sd),
+            "ci_low": float("nan"),
+            "ci_high": float("nan"),
+            "ci_half_width": float("nan"),
+        }
+    z = 1.96 if abs(level - 0.95) < 1e-6 else 1.96
+    half = z * sd / np.sqrt(n)
+    return {
+        "mean": float(mean),
+        "sd": float(sd),
+        "ci_low": float(mean - half),
+        "ci_high": float(mean + half),
+        "ci_half_width": float(half),
+    }
 
 def save_model(pipeline: Any, path: str) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -296,11 +330,21 @@ def make_pipeline_and_grid(model_name: str, use_gpu: bool):
     if m == "xgb":
         if not _safe_has_xgb():
             raise ImportError("xgboost not installed.")
-        tree_method = "gpu_hist" if use_gpu else "hist"
-        predictor = "gpu_predictor" if use_gpu else "auto"
-        est = XGBRegressor(objective="reg:squarederror", random_state=42, n_jobs=-1, tree_method=tree_method, predictor=predictor)
-        pipe = SkPipeline([("imputer", SimpleImputer(strategy="median")), ("model", est)])
-        grid = {"model__n_estimators": [250, 500, 1000], "model__max_depth": [3, 7, 11], "model__learning_rate": [0.03, 0.05, 0.1], "model__subsample": [0.6, 0.8, 1.0], "model__colsample_bytree": [0.6, 0.8, 1.0], "model__min_child_weight": [1, 3, 5], "model__reg_alpha": [0.0, 0.5, 1.0], "model__reg_lambda": [0.5, 1.0, 2.0]}
+        est = XGBRegressor(objective="reg:squarederror", random_state=42, n_jobs=-1, tree_method="hist", predictor="auto")
+        pipe = SkPipeline([
+            ("imputer", SimpleImputer(strategy="median")),
+            ("model", est),
+        ])
+        grid = {
+            "model__n_estimators": [250, 500, 1000],
+            "model__max_depth": [3, 7, 11],
+            "model__learning_rate": [0.03, 0.05, 0.1],
+            "model__subsample": [0.6, 0.8, 1.0],
+            "model__colsample_bytree": [0.6, 0.8, 1.0],
+            "model__min_child_weight": [1, 3, 5],
+            "model__reg_alpha": [0.0, 0.5, 1.0],
+            "model__reg_lambda": [0.5, 1.0, 2.0],
+        }
         return pipe, grid
     if m == "catboost":
         if not _safe_has_catboost():
@@ -308,7 +352,14 @@ def make_pipeline_and_grid(model_name: str, use_gpu: bool):
         task_type = "GPU" if use_gpu else "CPU"
         est = CatBoostRegressor(loss_function="RMSE", random_seed=42, task_type=task_type, verbose=False)
         pipe = SkPipeline([("imputer", SimpleImputer(strategy="median")), ("model", est)])
-        grid = {"model__iterations": [250, 500, 1000], "model__depth": [4, 6, 8], "model__learning_rate": [0.03, 0.05, 0.1], "model__l2_leaf_reg": [1.0, 3.0, 7.0], "model__subsample": [0.7, 0.85, 1.0], "model__bagging_temperature": [0, 1, 3], "model__random_strength": [1, 5, 10]}
+        grid = {
+            "model__iterations": [250, 500, 1000],
+            "model__depth": [4, 6, 8],
+            "model__learning_rate": [0.03, 0.05, 0.1],
+            "model__l2_leaf_reg": [1.0, 3.0, 7.0],
+            "model__bagging_temperature": [0, 1, 3],
+            "model__random_strength": [1, 5, 10],
+        }
         return pipe, grid
     raise ValueError(f"Unknown model_name: {model_name}")
 
@@ -350,12 +401,13 @@ def run_nn_grid(X: pd.DataFrame, y: np.ndarray, cv_splits: int = 5, out_dir: str
         combos = all_combos
         print(f"[mlp] trying {len(combos)} configs")
     cv = KFold(n_splits=cv_splits, shuffle=True, random_state=42)
-    rows = []
+    fold_rows = []
+    summary_rows = []
     best_score = -np.inf
     best_cfg = None
-    for cfg in combos:
+    for cfg_id, cfg in enumerate(combos):
         scores = []
-        for tr, va in cv.split(X):
+        for fold_idx, (tr, va) in enumerate(cv.split(X)):
             Xt, Xv = X.iloc[tr], X.iloc[va]
             yt, yv = y[tr], y[va]
             model = TorchMLPModel.from_config(cfg)
@@ -366,25 +418,44 @@ def run_nn_grid(X: pd.DataFrame, y: np.ndarray, cv_splits: int = 5, out_dir: str
             else:
                 score = -mean_absolute_error(yv, preds)
             scores.append(score)
+            row = {"config_id": cfg_id, "fold": fold_idx, "score": float(score)}
+            row.update(cfg)
+            fold_rows.append(row)
         mean_score = float(np.mean(scores))
-        rows.append({"params": cfg, "mean_score": mean_score})
+        srow = {"config_id": cfg_id, "mean_score": mean_score}
+        srow.update(cfg)
+        summary_rows.append(srow)
         if mean_score > best_score:
             best_score = mean_score
             best_cfg = cfg
-    res_df = pd.DataFrame(rows)
+    folds_df = pd.DataFrame(fold_rows)
+    folds_csv = os.path.join(out_dir, "mlp_cv_folds_detailed.csv")
+    folds_df.to_csv(folds_csv, index=False)
+    res_df = pd.DataFrame(summary_rows)
     res_csv = os.path.join(out_dir, "mlp_cv_results.csv")
     res_df.to_csv(res_csv, index=False)
     best_model = TorchMLPModel.from_config(best_cfg).fit(X, y)
     best_pkl = os.path.join(out_dir, "mlp_best.pkl")
     best_model.save(best_pkl)
+    epoch_csv = None
+    if hasattr(best_model, "epoch_logs_") and best_model.epoch_logs_:
+        epoch_df = pd.DataFrame(best_model.epoch_logs_)
+        epoch_csv = os.path.join(out_dir, "mlp_best_epoch_logs.csv")
+        epoch_df.to_csv(epoch_csv, index=False)
     summary = {
         "model": "mlp",
         "use_gpu": gpu_available(),
         "best_params": best_cfg,
         "best_model_path": best_pkl,
         "cv_results_csv": res_csv,
+        "cv_folds_csv": folds_csv,
+        "epoch_logs_csv": epoch_csv,
         "score": round(best_score, 4),
     }
+    summary_df = pd.DataFrame([summary])
+    summary_csv = os.path.join(out_dir, "mlp_cv_summary_with_ci.csv")
+    summary_df.to_csv(summary_csv, index=False)
+    summary["summary_csv"] = summary_csv
     print(f"[mlp] best {refit_metric}={summary['score']:.3f} | GPU={summary['use_gpu']}")
     return summary
 
@@ -446,18 +517,36 @@ def run_grid_search(model_name: str, X: pd.DataFrame, y: np.ndarray, groups: Opt
     std_mae = float(res_df.loc[bi, "std_test_mae"])
     mean_r2 = float(res_df.loc[bi, "mean_test_r2"])
     std_r2 = float(res_df.loc[bi, "std_test_r2"])
+    mae_ci = metric_ci_from_mean_sd(mean_mae, std_mae, cv_splits, level=0.95)
+    r2_ci = metric_ci_from_mean_sd(mean_r2, std_r2, cv_splits, level=0.95)
     summary = {
         "model": model_name,
         "use_gpu": use_gpu,
         "best_params": gs.best_params_,
         "best_model_path": best_pkl,
         "cv_results_csv": res_csv,
-        "MAE_mean": round(mean_mae, 4),
-        "MAE_sd": round(std_mae, 4),
-        "R2_mean": round(mean_r2, 4),
-        "R2_sd": round(std_r2, 4),
+        "MAE_mean": round(mae_ci["mean"], 4),
+        "MAE_sd": round(mae_ci["sd"], 4),
+        "MAE_ci_low": round(mae_ci["ci_low"], 4),
+        "MAE_ci_high": round(mae_ci["ci_high"], 4),
+        "MAE_ci_half_width": round(mae_ci["ci_half_width"], 4),
+        "R2_mean": round(r2_ci["mean"], 4),
+        "R2_sd": round(r2_ci["sd"], 4),
+        "R2_ci_low": round(r2_ci["ci_low"], 4),
+        "R2_ci_high": round(r2_ci["ci_high"], 4),
+        "R2_ci_half_width": round(r2_ci["ci_half_width"], 4),
     }
-    print(f"[{model_name}] best R2={summary['R2_mean']:.3f} sd={summary['R2_sd']:.3f} MAE={summary['MAE_mean']:.3f} sd={summary['MAE_sd']:.3f} GPU={use_gpu}")
+    summary_df = pd.DataFrame([summary])
+    summary_csv = os.path.join(out_dir, f"{model_name}_cv_summary_with_ci.csv")
+    summary_df.to_csv(summary_csv, index=False)
+    summary["summary_csv"] = summary_csv
+    print(
+        f"[{model_name}] best R2={summary['R2_mean']:.3f} "
+        f"(95% CI {summary['R2_ci_low']:.3f}–{summary['R2_ci_high']:.3f}) "
+        f"MAE={summary['MAE_mean']:.3f} "
+        f"(95% CI {summary['MAE_ci_low']:.3f}–{summary['MAE_ci_high']:.3f}) "
+        f"GPU={use_gpu}"
+    )
     return summary
 
 def run_all_models(X: pd.DataFrame, y: np.ndarray, groups: Optional[np.ndarray] = None, models: List[str] = ("lasso","elasticnet","rf","svr","knn","xgb","catboost","mlp"), cv_splits: int = 5, out_dir: str = "../Data/grid_results", refit_metric: str = "r2") -> Dict[str, Dict[str, Any]]:
@@ -468,7 +557,7 @@ def run_all_models(X: pd.DataFrame, y: np.ndarray, groups: Optional[np.ndarray] 
         results[m] = run_grid_search(m, X, y, groups=groups, cv_splits=cv_splits, out_dir=out_dir, refit_metric=refit_metric)
     return results
 
-def _bg_sample(Xp: np.ndarray, max_bg: int = 500, seed: int = 42) -> np.ndarray:
+def _bg_sample(Xp: np.ndarray, max_bg: int = 200, seed: int = 42) -> np.ndarray:
     if len(Xp) <= max_bg:
         return Xp
     rng = np.random.RandomState(seed)
@@ -479,6 +568,7 @@ def shap_mean_abs_importance(shap_values: np.ndarray, feature_names) -> pd.Serie
     return pd.Series(np.mean(np.abs(shap_values), axis=0), index=list(feature_names)).sort_values(ascending=False)
 
 def shap_importance_for_pipeline(pipe, X: pd.DataFrame, top_n: int = 20) -> pd.Series:
+    X = X.apply(pd.to_numeric, errors="coerce")
     pre = None
     model = None
     feat_names = list(X.columns)
@@ -494,13 +584,20 @@ def shap_importance_for_pipeline(pipe, X: pd.DataFrame, top_n: int = 20) -> pd.S
         Xp = pre.transform(X)
     else:
         Xp = X.values
+    Xp = np.asarray(Xp, dtype=float)
     name = model.__class__.__name__.lower()
     if any(k in name for k in ["forest", "xgb", "catboost", "tree"]):
-        sv = shap.TreeExplainer(model).shap_values(Xp)
-    elif any(k in name for k in ["lasso", "elasticnet", "linear"]):
-        sv = shap.LinearExplainer(model, _bg_sample(Xp, 500)).shap_values(Xp)
+        if hasattr(model, "feature_importances_"):
+            imp = pd.Series(model.feature_importances_, index=feat_names)
+            return imp.sort_values(ascending=False).head(top_n)
+        else:
+            raise RuntimeError("Tree-like model without feature_importances_.")
+    if any(k in name for k in ["lasso", "elasticnet", "linear"]):
+        bg = _bg_sample(Xp, 500)
+        sv = shap.LinearExplainer(model, bg).shap_values(Xp)
     else:
-        sv = shap.KernelExplainer(model.predict, _bg_sample(Xp, 200)).shap_values(Xp, nsamples="auto")
+        bg = _bg_sample(Xp, 200)
+        sv = shap.KernelExplainer(model.predict, bg).shap_values(Xp, nsamples="auto")
     imp = shap_mean_abs_importance(np.array(sv), feat_names)
     return imp.head(top_n)
 
