@@ -3,6 +3,7 @@ import pandas as pd
 import joblib
 import shap
 import importlib
+from tqdm import tqdm
 from typing import Optional, Tuple, List, Any
 from sklearn.linear_model import LassoCV, Lasso, ElasticNetCV, ElasticNet
 from sklearn.neighbors import KNeighborsRegressor
@@ -396,6 +397,7 @@ class TorchMLPModel:
         self.scheduler_type = scheduler_type
         self.scheduler_step = scheduler_step
         self.scheduler_gamma = scheduler_gamma
+        self.epoch_logs_: List[Dict[str, Any]] = []
 
     @classmethod
     def from_config(cls, cfg: dict):
@@ -470,6 +472,7 @@ class TorchMLPModel:
         return None
 
     def fit(self, X: pd.DataFrame, y: np.ndarray):
+        from tqdm import tqdm
         self._ensure_torch()
         torch.manual_seed(self.random_state)
         np.random.seed(self.random_state)
@@ -486,10 +489,11 @@ class TorchMLPModel:
         sch = self._make_scheduler(opt, self.epochs)
         loss_fn = nn.MSELoss()
         best_loss, best_state, wait = float("inf"), None, 0
+        self.epoch_logs_ = []
         for epoch in range(self.epochs):
             self.net.train()
             total, count = 0.0, 0
-            for xb, yb in loader:
+            for xb, yb in tqdm(loader, desc=f"epoch {epoch+1}/{self.epochs}", leave=False):
                 xb, yb = xb.to(self.device), yb.to(self.device)
                 opt.zero_grad()
                 loss = loss_fn(self.net(xb), yb)
@@ -501,6 +505,12 @@ class TorchMLPModel:
             if sch is not None:
                 if self.scheduler_type in ("step", "cosine"):
                     sch.step()
+            lr_now = opt.param_groups[0]["lr"]
+            self.epoch_logs_.append({
+                "epoch": int(epoch + 1),
+                "train_loss": float(epoch_loss),
+                "lr": float(lr_now),
+            })
             if epoch_loss < best_loss - 1e-6:
                 best_loss, best_state, wait = epoch_loss, {k: v.cpu() for k, v in self.net.state_dict().items()}, 0
             else:
@@ -552,6 +562,7 @@ class TorchMLPModel:
             "feat_cols": self.feat_cols,
             "state_dict": {k: v.cpu().numpy() for k, v in self.net.state_dict().items()},
             "hparams": self.get_params(),
+            "epoch_logs_": self.epoch_logs_,
         }, path)
 
     def load(self, path: str):
@@ -564,6 +575,7 @@ class TorchMLPModel:
         self.net = self._build_net(len(self.feat_cols)).to(self.device)
         state = {k: torch.from_numpy(v) for k, v in obj["state_dict"].items()}
         self.net.load_state_dict(state)
+        self.epoch_logs_ = obj.get("epoch_logs_", [])
         self.fitted = True
         return self
 
