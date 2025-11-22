@@ -57,4 +57,14 @@ python bootstrap.py \
   --out_csv ../grid_results_horizons/ci_all_models.csv
 ```
 
+# Predict next-day W_t or S_t
+
+```bash
+python run_all_models.py \
+  --data ../Data/Symptomtrackingdata_csv-cleaned_with_vars_ml_ready.csv \
+  --out_dir ../Data/grid_results_S \
+  --use_delta \
+  --target S_t
+```
+
 
