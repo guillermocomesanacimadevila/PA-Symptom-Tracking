@@ -68,3 +68,15 @@ python run_all_models.py \
 ```
 
 
+## Run Causal ML!
+
+```bash
+python t_learner.py \
+  --data path/to/your_ml_ready.csv \
+  --out_dir Results_TLearner \
+  --id_col id \
+  --day_col day \
+  --L 3 \
+  --outcome_col U_t \
+  --models lasso, elasticnet, rf, svr, knn, xgb, catboost, mlp
+```
