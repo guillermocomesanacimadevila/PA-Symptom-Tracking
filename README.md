@@ -79,5 +79,6 @@ python t_learner.py \
   --L 3 \
   --H 3 \
   --outcome_col U_t \
-  --models lasso
+  --models lasso \
+  --test_size 0.2
 ```
