@@ -77,6 +77,7 @@ python t_learner.py \
   --id_col id \
   --day_col day \
   --L 3 \
+  --H 3 \
   --outcome_col U_t \
   --models lasso
 ```
