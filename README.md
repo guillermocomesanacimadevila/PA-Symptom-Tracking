@@ -80,7 +80,7 @@ python t_learner.py \
   --H 3 \
   --outcome_col U_t \
   --models lasso \
-  --test_size 0.2
+  --test_size 0.3
 ```
 
 ## Expl of causal results
