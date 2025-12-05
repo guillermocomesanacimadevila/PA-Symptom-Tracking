@@ -73,14 +73,14 @@ python run_all_models.py \
 ```bash
 python t_learner.py \
   --data ../Data/Symptomtrackingdata_csv-cleaned_with_vars_ml_ready.csv \
-  --out_dir Results_TLearner \
+  --out_dir ../outputs/Results_TLearner \
   --id_col id \
   --day_col day \
   --L 3 \
   --H 3 \
-  --outcome_col U_t \
+  --outcome_col W_t \
   --models lasso \
-  --test_size 0.3
+  --test_size 0.2
 ```
 
 ## Expl of causal results
