@@ -79,7 +79,7 @@ python t_learner.py \
   --L 3 \
   --H 3 \
   --outcome_col W_t \
-  --models "lasso,elasticnet,rf,xgb,catboost,svr,knn,mlp" \
+  --models lasso \
   --test_size 0.2
 ```
 
