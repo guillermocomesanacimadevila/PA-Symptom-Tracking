@@ -83,6 +83,10 @@ python t_learner.py \
   --test_size 0.2
 ```
 
+```bash
+python run_horizons.py
+```
+
 ## Expl of causal results
 
 ```bash
