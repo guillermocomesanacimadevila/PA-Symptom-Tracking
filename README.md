@@ -62,9 +62,9 @@ python bootstrap.py \
 ```bash
 python run_all_models.py \
   --data ../Data/Symptomtrackingdata_csv-cleaned_with_vars_ml_ready.csv \
-  --out_dir ../Data/grid_results_S \
+  --out_dir ../Data/grid_results_Ut \
   --use_delta \
-  --target S_t
+  --target U_t
 ```
 
 
