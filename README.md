@@ -1,4 +1,4 @@
-# Machine learning for symptom dynamic prediction and treatment effect estimation in pernicious anaemia
+# Machine learning for dynamic symptom prediction and treatment effect estimation in pernicious anaemia
 
 ---
 
