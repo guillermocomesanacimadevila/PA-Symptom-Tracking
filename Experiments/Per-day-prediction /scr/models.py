@@ -5,7 +5,7 @@ import shap
 import importlib
 from tqdm import tqdm
 from typing import Optional, Tuple, List, Any
-from sklearn.linear_model import LassoCV, Lasso, ElasticNetCV, ElasticNet
+from sklearn.linear_model import LassoCV, Lasso, ElasticNetCV, ElasticNet, Ridge, RidgeCV
 from sklearn.neighbors import KNeighborsRegressor
 from sklearn.svm import SVR
 from sklearn.ensemble import RandomForestRegressor
@@ -54,6 +54,92 @@ def _mean_abs_shap(values: np.ndarray, feature_names: List[str]) -> pd.Series:
     if vals.ndim == 1:
         vals = vals.reshape(1, -1)
     return pd.Series(np.mean(np.abs(vals), axis=0), index=feature_names).sort_values(ascending=False)
+
+class RidgeModel:
+    def __init__(self, n_splits: int = 5, random_state: int = 42, max_iter: int = 10000):
+        self.n_splits = n_splits
+        self.random_state = random_state
+        self.max_iter = max_iter
+        self.scaler = StandardScaler()
+        self.model = Ridge(max_iter=max_iter)
+        self.medians: Optional[pd.Series] = None
+        self.feat_cols: Optional[List[str]] = None
+        self.fitted = False
+
+    def prepare(self, X: pd.DataFrame, fit_scaler: bool = False) -> np.ndarray:
+        X = _numeric_df(X).astype(np.float64)
+        if self.feat_cols is not None:
+            for c in self.feat_cols:
+                if c not in X.columns:
+                    X[c] = np.nan
+            X = X[self.feat_cols]
+        X = X.replace([np.inf, -np.inf], np.nan)
+        if self.medians is None:
+            self.medians = X.median(numeric_only=True).fillna(0.0)
+        X = X.fillna(self.medians).fillna(0.0)
+        Xs = self.scaler.fit_transform(X) if fit_scaler else self.scaler.transform(X)
+        np.clip(Xs, -10, 10, out=Xs)
+        return np.nan_to_num(Xs)
+
+    def fit(self, X: pd.DataFrame, y: np.ndarray):
+        Xn = _numeric_df(X)
+        keep = (Xn.notna().any(axis=0)) & (Xn.std(axis=0, skipna=True).fillna(0) > 0)
+        Xn = Xn.loc[:, keep]
+        self.feat_cols = Xn.columns.tolist()
+        Xs = self.prepare(Xn, fit_scaler=True)
+        self.model.fit(Xs, y)
+        self.fitted = True
+        return self
+
+    def predict(self, X: pd.DataFrame, clip_to_bounds: bool = True) -> np.ndarray:
+        if not self.fitted:
+            raise RuntimeError("Model not fitted.")
+        Xs = self.prepare(X, fit_scaler=False)
+        yhat = self.model.predict(Xs)
+        return _clip(yhat) if clip_to_bounds else yhat
+
+    def evaluate(self, X: pd.DataFrame, y: np.ndarray, label: str = "Ridge") -> Tuple[float, float]:
+        preds = self.predict(X)
+        mae, r2 = mean_absolute_error(y, preds), r2_score(y, preds)
+        print(f"{label:<12} | MAE: {mae:.3f} | R²: {r2:.3f}")
+        return mae, r2
+
+    def coefficients(self) -> pd.Series:
+        if not self.fitted:
+            raise RuntimeError("Model not fitted.")
+        coefs = pd.Series(self.model.coef_, index=self.feat_cols)
+        return coefs[coefs != 0].sort_values(key=np.abs, ascending=False)
+
+    def shap_importance(self, X: pd.DataFrame, top_n: int = 20) -> pd.Series:
+        if not self.fitted:
+            raise RuntimeError("Model not fitted.")
+        Xs = self.prepare(X, fit_scaler=False)
+        bg = _bg_sample(Xs, 500)
+        expl = shap.LinearExplainer(self.model, bg)
+        sv = expl.shap_values(Xs)
+        return _mean_abs_shap(sv, self.feat_cols).head(top_n)
+
+    def sklearn_pipeline(self):
+        return Pipeline([
+            ("imputer", SimpleImputer(strategy="median")),
+            ("scaler", StandardScaler()),
+            ("model", Ridge(max_iter=self.max_iter))
+        ])
+
+    def save(self, path: str):
+        joblib.dump(
+            {"scaler": self.scaler, "model": self.model, "medians": self.medians, "feat_cols": self.feat_cols},
+            path
+        )
+
+    def load(self, path: str):
+        obj = joblib.load(path)
+        self.scaler = obj["scaler"]
+        self.model = obj["model"]
+        self.medians = obj["medians"]
+        self.feat_cols = obj["feat_cols"]
+        self.fitted = True
+        return self
 
 class LassoModel:
     def __init__(self, n_splits: int = 5, random_state: int = 42, max_iter: int = 10000):
@@ -484,7 +570,9 @@ class TorchMLPModel:
         yp = np.asarray(y, dtype=np.float32).reshape(-1, 1)
         self.net = self._build_net(Xp.shape[1]).to(self.device)
         ds = TensorDataset(torch.from_numpy(Xp), torch.from_numpy(yp))
-        loader = DataLoader(ds, batch_size=self.batch_size, shuffle=True)
+        bs = min(self.batch_size, len(ds))
+        drop_last = self.use_batchnorm
+        loader = DataLoader(ds, batch_size=self.batch_size, shuffle=True, num_workers=0)
         opt = torch.optim.Adam(self.net.parameters(), lr=self.lr, weight_decay=self.weight_decay)
         sch = self._make_scheduler(opt, self.epochs)
         loss_fn = nn.MSELoss()
