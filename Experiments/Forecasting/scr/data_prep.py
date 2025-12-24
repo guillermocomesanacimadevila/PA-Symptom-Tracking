@@ -1,0 +1,276 @@
+import argparse
+import numpy as np
+import pandas as pd
+from typing import List, Optional
+
+def gb(df: pd.DataFrame, by):
+    try:
+        return df.groupby(by, group_keys=False, include_groups=False)
+    except TypeError:
+        return df.groupby(by, group_keys=False)
+
+SYMPTOM_ITEMS_ALIASES = [
+    "tiredness","poor_concentration","irritability","intestinal_problems",
+    "memory_loss","muscle_pain","nerve_pain","pins_and_needles",
+    "tinnitus","word_finding_difficulties","dizziness",
+    "Tiredness","Poor concentration","Irritability","Intestinal problems",
+    "Memory loss","Muscle pain","Nerve pain","Pins and needles",
+    "Tinnitus","Word-finding difficulties","Dizziness",
+]
+
+def first_present(df: pd.DataFrame, candidates: List[str]) -> Optional[str]:
+    for c in candidates:
+        if c in df.columns:
+            return c
+    return None
+
+def any_present(df: pd.DataFrame, candidates: List[str]) -> List[str]:
+    return [c for c in candidates if c in df.columns]
+
+def infer_hmax(df: pd.DataFrame, id_col: str, day_col: str) -> int:
+    s = gb(df, id_col)[day_col].apply(lambda x: pd.to_numeric(x, errors="coerce").max() - pd.to_numeric(x, errors="coerce").min())
+    s = s.replace([np.inf, -np.inf], np.nan).dropna()
+    if len(s) == 0:
+        return 1
+    h = int(np.nanmax(s.to_numpy(dtype=float)))
+    return max(1, h)
+
+def to_num(df, col):
+    if col is None:
+        return
+    if col in df.columns:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+def safe_div(a, b):
+    out = a / b
+    out = out.replace([np.inf, -np.inf], np.nan)
+    return out
+
+def add_lags_rolls_block(g: pd.DataFrame, cols: List[str]) -> pd.DataFrame:
+    g = g.copy()
+    for col in cols:
+        if col not in g.columns:
+            continue
+        g[f"{col}_lag1"] = g[col].shift(1)
+        g[f"{col}_lag2"] = g[col].shift(2)
+        g[f"{col}_lag7"] = g[col].shift(7)
+        g[f"{col}_roll3_mean"] = g[col].shift(1).rolling(3, min_periods=1).mean()
+        g[f"{col}_roll7_mean"] = g[col].shift(1).rolling(7, min_periods=1).mean()
+        g[f"{col}_roll7_std"] = g[col].shift(1).rolling(7, min_periods=2).std()
+        g[f"{col}_roll14_mean"] = g[col].shift(1).rolling(14, min_periods=3).mean()
+        g[f"{col}_roll14_std"] = g[col].shift(1).rolling(14, min_periods=3).std()
+        g[f"{col}_ewm_a03"] = g[col].shift(1).ewm(alpha=0.30, adjust=False).mean()
+        g[f"{col}_ewm_a10"] = g[col].shift(1).ewm(alpha=0.10, adjust=False).mean()
+    if "W_t" in g.columns:
+        g["dW_t"] = g["W_t"] - g.get("W_t_lag1")
+    if "S_t" in g.columns:
+        g["dS_t"] = g["S_t"] - g.get("S_t_lag1")
+    if "U_t" in g.columns:
+        g["dU_t"] = g["U_t"] - g.get("U_t_lag1")
+    return g
+
+def add_running_stats(df: pd.DataFrame, id_col: str, base: str, win: int = 14):
+    if base not in df.columns:
+        return df
+    runmean = gb(df, id_col)[base].transform(lambda s: s.shift(1).rolling(win, min_periods=3).mean())
+    runstd = gb(df, id_col)[base].transform(lambda s: s.shift(1).rolling(win, min_periods=3).std())
+    exp_mean = gb(df, id_col)[base].transform(lambda s: s.shift(1).expanding().mean())
+    exp_std = gb(df, id_col)[base].transform(lambda s: s.shift(1).expanding().std())
+    df[f"{base}_runmean_{win}"] = runmean
+    df[f"{base}_runstd_{win}"] = runstd
+    df[f"{base}_within_z"] = (df[base] - exp_mean) / exp_std.replace(0, np.nan)
+    past_mean = gb(df, id_col)[base].transform(lambda s: s.shift(1).expanding().mean())
+    df[f"{base}_minus_person_mean"] = df[base] - past_mean
+    return df
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--input", required=True)
+    parser.add_argument("--alpha", type=float, default=1.0)
+    parser.add_argument("--beta", type=float, default=1.0)
+    parser.add_argument("--use-precomputed-s", action="store_true")
+    parser.add_argument("--id-col", default=None)
+    parser.add_argument("--day-col", default=None)
+    parser.add_argument("--date-col", default=None)
+    parser.add_argument("--h-max", default="auto")
+    parser.add_argument("--h-cap", type=int, default=None)
+    args = parser.parse_args()
+
+    df = pd.read_csv(args.input)
+
+    ID = args.id_col or first_present(df, ["ID","id"])
+    DAY = args.day_col or first_present(df, ["Day","day"])
+    DATE = args.date_col or first_present(df, ["StartDate","start_date"])
+    TREATMENT = first_present(df, ["Treatment","treatment"])
+    TREATMENT_TYPE = first_present(df, ["TreatmentType","treatment_type"])
+    W_COL = first_present(df, ["OverallWellbeing","overall_wellbeing"])
+    S_PRE = first_present(df, ["mean_symptom_score_active","mean_symptom_score_active"])
+    TOTAL_SYM = first_present(df, ["total_symptom_score"])
+    SYM_COUNT = first_present(df, ["symptom_count"])
+    MAX_SYM = first_present(df, ["max_symptom_score"])
+    SYM_VAR = first_present(df, ["symptom_variability"])
+    COG_MEAN = first_present(df, ["cognitive_mean"])
+    NEURO_MEAN = first_present(df, ["neuro_mean"])
+    PAINFAT_MEAN = first_present(df, ["painfatigue_mean"])
+
+    if ID is None or DAY is None:
+        raise ValueError("Missing ID or Day")
+    if W_COL is None:
+        raise ValueError("Missing wellbeing column")
+
+    if DATE and DATE in df.columns:
+        df[DATE] = pd.to_datetime(df[DATE], dayfirst=True, errors="coerce")
+
+    to_num(df, DAY)
+    for c in [W_COL, S_PRE, TOTAL_SYM, SYM_COUNT, MAX_SYM, SYM_VAR, COG_MEAN, NEURO_MEAN, PAINFAT_MEAN]:
+        to_num(df, c)
+
+    if args.use_precomputed_s and (S_PRE is not None) and (S_PRE in df.columns):
+        df["S_t"] = pd.to_numeric(df[S_PRE], errors="coerce")
+    else:
+        items_present = any_present(df, SYMPTOM_ITEMS_ALIASES)
+        if not items_present:
+            raise ValueError("No symptom items and --use-precomputed-s not set")
+        item_block = df[items_present].apply(pd.to_numeric, errors="coerce").replace(0, np.nan)
+        df["S_t"] = item_block.mean(axis=1, skipna=True)
+
+    df["W_t"] = pd.to_numeric(df[W_COL], errors="coerce").clip(0, 10)
+    df["S_t"] = pd.to_numeric(df["S_t"], errors="coerce").clip(0, 10)
+    df["w_t"] = df["W_t"] / 10.0
+    df["q_t"] = 1.0 - (df["S_t"] / 10.0)
+    alpha = float(args.alpha)
+    beta = float(args.beta)
+    df["U_t"] = 10.0 * (df["w_t"] ** alpha) * (df["q_t"] ** beta)
+    df["wq"] = df["w_t"] * df["q_t"]
+    df["w_t2"] = df["w_t"] ** 2
+    df["q_t2"] = df["q_t"] ** 2
+
+    sort_cols = [ID, DAY] if not (DATE and DATE in df.columns) else [ID, DAY, DATE]
+    df = df.sort_values(sort_cols)
+
+    h_arg = str(args.h_max).strip().lower()
+    if h_arg in ("auto", "hmax", "max"):
+        H = infer_hmax(df, ID, DAY)
+    else:
+        H = int(float(h_arg))
+    H = max(1, H)
+    if args.h_cap is not None:
+        H = min(H, int(args.h_cap))
+
+    if TREATMENT and (TREATMENT in df.columns):
+        df["is_treated"] = (df[TREATMENT] == 1).astype(int)
+        def _days_since_start(g: pd.DataFrame) -> pd.Series:
+            out = pd.Series(0.0, index=g.index)
+            if (g["is_treated"] == 1).any():
+                t0 = g.loc[g["is_treated"] == 1, DAY].iloc[0]
+                out = (g[DAY] - t0).clip(lower=0)
+            return out
+        df["days_since_treatment_start"] = gb(df, ID).apply(_days_since_start)
+    else:
+        df["is_treated"] = 0
+        df["days_since_treatment_start"] = 0.0
+
+    df["treated_today"] = df["is_treated"]
+    df["treated_yday"] = gb(df, ID)["is_treated"].shift(1).fillna(0).astype(int)
+    treated_last3 = gb(df, ID)["is_treated"].apply(lambda s: s.rolling(3, min_periods=1).max())
+    df["treated_last3_any"] = treated_last3.reset_index(level=0, drop=True).fillna(0).astype(int)
+
+    def _since_last_treat(s: pd.Series) -> pd.Series:
+        c = s.eq(1).cumsum()
+        out = (~s.eq(1)).groupby(c).cumcount()
+        return out.where(c > 0, np.nan).fillna(1e9)
+
+    df["days_since_last_treat"] = gb(df, ID)["is_treated"].apply(_since_last_treat).reset_index(level=0, drop=True)
+
+    for h in range(1, H + 1):
+        df[f"U_next_h{h}"] = gb(df, ID)["U_t"].shift(-h)
+        df[f"dU_next_h{h}"] = df[f"U_next_h{h}"] - df["U_t"]
+        df[f"W_next_h{h}"] = gb(df, ID)["W_t"].shift(-h)
+        df[f"dW_next_h{h}"] = df[f"W_next_h{h}"] - df["W_t"]
+        df[f"S_next_h{h}"] = gb(df, ID)["S_t"].shift(-h)
+        df[f"dS_next_h{h}"] = df[f"S_next_h{h}"] - df["S_t"]
+
+    df["Ustar_next_day"] = df["U_next_h1"]
+    df["dU_next"] = df["dU_next_h1"]
+    df["Wstar_next_day"] = df["W_next_h1"]
+    df["dW_next"] = df["dW_next_h1"]
+    df["Sstar_next_day"] = df["S_next_h1"]
+    df["dS_next"] = df["dS_next_h1"]
+
+    out_intermediate = args.input.replace(".csv", "_with_composites.csv")
+
+    keep_intermediate = [
+        ID, DAY, DATE, W_COL,
+        "W_t","S_t","U_t","w_t","q_t","wq","w_t2","q_t2",
+        "Ustar_next_day","dU_next","Wstar_next_day","dW_next","Sstar_next_day","dS_next",
+        TREATMENT, TREATMENT_TYPE, "is_treated", "days_since_treatment_start",
+        "treated_today", "treated_yday", "treated_last3_any", "days_since_last_treat",
+        TOTAL_SYM, SYM_COUNT, MAX_SYM, SYM_VAR, COG_MEAN, NEURO_MEAN, PAINFAT_MEAN
+    ]
+    keep_intermediate = [c for c in keep_intermediate if (c is not None) and (c in df.columns)]
+    for h in range(1, H + 1):
+        for c in [f"U_next_h{h}", f"dU_next_h{h}", f"W_next_h{h}", f"dW_next_h{h}", f"S_next_h{h}", f"dS_next_h{h}"]:
+            if c in df.columns:
+                keep_intermediate.append(c)
+
+    df[keep_intermediate].to_csv(out_intermediate, index=False)
+
+    df = gb(df, ID).apply(lambda g: add_lags_rolls_block(g, ["W_t","S_t","U_t"]))
+
+    if DATE and (DATE in df.columns):
+        df["dow"] = df[DATE].dt.dayofweek.astype("Int64")
+    else:
+        df["dow"] = (df[DAY] % 7).astype("Int64")
+
+    _dow = df["dow"].astype(float).fillna(0.0)
+    df["dow_sin"] = np.sin(2 * np.pi * _dow / 7.0)
+    df["dow_cos"] = np.cos(2 * np.pi * _dow / 7.0)
+    df["days_since_start"] = gb(df, ID)[DAY].transform(lambda s: s - s.min())
+
+    df = add_running_stats(df, ID, "U_t", win=14)
+    df = add_running_stats(df, ID, "W_t", win=14)
+    df = add_running_stats(df, ID, "S_t", win=14)
+
+    label_cols = []
+    for h in range(1, H + 1):
+        label_cols += [
+            f"dU_next_h{h}", f"U_next_h{h}",
+            f"dW_next_h{h}", f"W_next_h{h}",
+            f"dS_next_h{h}", f"S_next_h{h}",
+        ]
+    label_cols += ["dU_next","Ustar_next_day","dW_next","Wstar_next_day","dS_next","Sstar_next_day"]
+    label_cols = [c for c in label_cols if c in df.columns]
+
+    base_features = [
+        "W_t","S_t","U_t","w_t","q_t","wq","w_t2","q_t2",
+        TOTAL_SYM,SYM_COUNT,MAX_SYM,SYM_VAR,COG_MEAN,NEURO_MEAN,PAINFAT_MEAN,
+        "is_treated",TREATMENT_TYPE,
+        DAY,"days_since_start","days_since_treatment_start",
+        "treated_today","treated_yday","treated_last3_any","days_since_last_treat",
+        "dow","dow_sin","dow_cos",
+        "W_t_lag1","S_t_lag1","U_t_lag1",
+        "W_t_lag2","S_t_lag2","U_t_lag2",
+        "W_t_lag7","S_t_lag7","U_t_lag7",
+        "dW_t","dS_t","dU_t",
+        "W_t_roll3_mean","S_t_roll3_mean","U_t_roll3_mean",
+        "W_t_roll7_mean","S_t_roll7_mean","U_t_roll7_mean",
+        "W_t_roll7_std","S_t_roll7_std","U_t_roll7_std",
+        "W_t_roll14_mean","S_t_roll14_mean","U_t_roll14_mean",
+        "W_t_roll14_std","S_t_roll14_std","U_t_roll14_std",
+        "W_t_ewm_a03","S_t_ewm_a03","U_t_ewm_a03",
+        "W_t_ewm_a10","S_t_ewm_a10","U_t_ewm_a10",
+        "U_t_runmean_14","U_t_runstd_14","U_t_within_z","U_t_minus_person_mean",
+        "W_t_runmean_14","W_t_runstd_14","W_t_within_z","W_t_minus_person_mean",
+        "S_t_runmean_14","S_t_runstd_14","S_t_within_z","S_t_minus_person_mean",
+    ]
+    base_features = [c for c in base_features if (c is not None) and (c in df.columns)]
+    ml_cols = [ID, DAY] + base_features + label_cols
+
+    out_ml = args.input.replace(".csv", "_ml_ready.csv")
+    df[ml_cols].to_csv(out_ml, index=False)
+
+    print(out_intermediate)
+    print(out_ml)
+
+if __name__ == "__main__":
+    main()
