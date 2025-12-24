@@ -44,10 +44,18 @@ conda env create -f env/environment.yml && conda activate symptom-tracking
 cd Scripts/ && chmod +x test.py && python test.py 
 ```
 
-# Data prep
+# Data prep & Hmax
 
 ```bash
-python data_prep.py --input ../Data/Symptomtrackingdata_csv-cleaned_with_vars.csv --h-max 60
+python data_prep.py --input ../Data/Symptomtrackingdata_csv-cleaned_with_vars.csv --h-max hmax
+```
+
+```bash
+python run_all_models.py \
+  --data ../Data/Symptomtrackingdata_csv-cleaned_with_vars_ml_ready.csv \
+  --out_dir ../Data/grid_results_horizons \
+  --h-max auto \
+  --h-cap 9999
 ```
 
 # Bootsraping
