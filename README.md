@@ -44,6 +44,14 @@ conda env create -f env/environment.yml && conda activate symptom-tracking
 cd Scripts/ && chmod +x test.py && python test.py 
 ```
 
+# Data prep
+
+```bash
+python data_prep.py --input data.csv --h-max 60
+```
+
+
+
 # Bootsraping
 
 
