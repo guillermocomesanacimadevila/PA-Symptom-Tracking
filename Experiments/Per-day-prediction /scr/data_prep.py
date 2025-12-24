@@ -36,6 +36,7 @@ def main():
     parser.add_argument("--id-col", default=None)
     parser.add_argument("--day-col", default=None)
     parser.add_argument("--date-col", default=None)
+    parser.add_argument("--h-max", default="14")
     args = parser.parse_args()
 
     df = pd.read_csv(args.input)
@@ -77,18 +78,25 @@ def main():
         item_block = df[items_present].apply(pd.to_numeric, errors="coerce").replace(0, np.nan)
         df["S_t"] = item_block.mean(axis=1, skipna=True)
 
-    df["W_t"] = pd.to_numeric(df[W_COL], errors="coerce").clip(0,10)
-    df["S_t"] = df["S_t"].clip(0,10)
-    df["w_t"] = df["W_t"]/10.0
-    df["q_t"] = 1.0 - (df["S_t"]/10.0)
+    df["W_t"] = pd.to_numeric(df[W_COL], errors="coerce").clip(0, 10)
+    df["S_t"] = df["S_t"].clip(0, 10)
+    df["w_t"] = df["W_t"] / 10.0
+    df["q_t"] = 1.0 - (df["S_t"] / 10.0)
     alpha, beta = float(args.alpha), float(args.beta)
-    df["U_t"] = 10.0*(df["w_t"]**alpha)*(df["q_t"]**beta)
-    df["wq"] = df["w_t"]*df["q_t"]
-    df["w_t2"] = df["w_t"]**2
-    df["q_t2"] = df["q_t"]**2
+    df["U_t"] = 10.0 * (df["w_t"] ** alpha) * (df["q_t"] ** beta)
+    df["wq"] = df["w_t"] * df["q_t"]
+    df["w_t2"] = df["w_t"] ** 2
+    df["q_t2"] = df["q_t"] ** 2
 
-    sort_cols = [ID,DAY] if not (DATE and DATE in df.columns) else [ID,DAY,DATE]
+    sort_cols = [ID, DAY] if not (DATE and DATE in df.columns) else [ID, DAY, DATE]
     df = df.sort_values(sort_cols)
+
+    h_arg = str(args.h_max).strip().lower()
+    if h_arg == "auto":
+        H = int(gb(df, ID)[DAY].apply(lambda s: s.max() - s.min()).max())
+    else:
+        H = int(h_arg)
+    H = max(1, H)
 
     if TREATMENT in df.columns:
         df["is_treated"] = (df[TREATMENT] == 1).astype(int)
@@ -107,29 +115,35 @@ def main():
     df["treated_yday"] = gb(df, ID)["is_treated"].shift(1).fillna(0).astype(int)
     treated_last3 = gb(df, ID)["is_treated"].apply(lambda s: s.rolling(3, min_periods=1).max())
     df["treated_last3_any"] = treated_last3.reset_index(level=0, drop=True).fillna(0).astype(int)
+
     def _since_last_treat(s: pd.Series) -> pd.Series:
         c = s.eq(1).cumsum()
         out = (~s.eq(1)).groupby(c).cumcount()
-        return out.where(c>0, np.nan).fillna(1e9)
+        return out.where(c > 0, np.nan).fillna(1e9)
+
     df["days_since_last_treat"] = gb(df, ID)["is_treated"].apply(_since_last_treat).reset_index(level=0, drop=True)
 
-    for h in range(1, 15):
+    for h in range(1, H + 1):
         df[f"Y_next_h{h}"] = gb(df, ID)["U_t"].shift(-h)
         df[f"dY_next_h{h}"] = df[f"Y_next_h{h}"] - df["U_t"]
+
     df["Ystar_next_day"] = df["Y_next_h1"]
     df["dY_next"] = df["dY_next_h1"]
 
     out_intermediate = args.input.replace(".csv", "_with_composites.csv")
-    keep_intermediate = [c for c in [
-        ID,DAY,DATE,W_COL,"S_t","w_t","q_t","U_t","Ystar_next_day","dY_next",
-        "Y_next_h1","Y_next_h2","Y_next_h3","Y_next_h4","Y_next_h5","Y_next_h6","Y_next_h7",
-        "Y_next_h8","Y_next_h9","Y_next_h10","Y_next_h11","Y_next_h12","Y_next_h13","Y_next_h14",
-        "dY_next_h1","dY_next_h2","dY_next_h3","dY_next_h4","dY_next_h5","dY_next_h6","dY_next_h7",
-        "dY_next_h8","dY_next_h9","dY_next_h10","dY_next_h11","dY_next_h12","dY_next_h13","dY_next_h14",
-        TREATMENT,TREATMENT_TYPE,"is_treated","days_since_treatment_start",
-        "treated_today","treated_yday","treated_last3_any","days_since_last_treat",
-        TOTAL_SYM,SYM_COUNT,MAX_SYM,SYM_VAR,COG_MEAN,NEURO_MEAN,PAINFAT_MEAN
-    ] if c in df.columns]
+
+    keep_intermediate = [
+        ID, DAY, DATE, W_COL, "S_t", "w_t", "q_t", "U_t", "Ystar_next_day", "dY_next",
+        TREATMENT, TREATMENT_TYPE, "is_treated", "days_since_treatment_start",
+        "treated_today", "treated_yday", "treated_last3_any", "days_since_last_treat",
+        TOTAL_SYM, SYM_COUNT, MAX_SYM, SYM_VAR, COG_MEAN, NEURO_MEAN, PAINFAT_MEAN
+    ]
+    keep_intermediate = [c for c in keep_intermediate if (c is not None) and (c in df.columns)]
+    for h in range(1, H + 1):
+        for c in (f"Y_next_h{h}", f"dY_next_h{h}"):
+            if c in df.columns:
+                keep_intermediate.append(c)
+
     df[keep_intermediate].to_csv(out_intermediate, index=False)
 
     def add_lags_rolls(g: pd.DataFrame) -> pd.DataFrame:
@@ -156,9 +170,10 @@ def main():
         df["dow"] = df[DATE].dt.dayofweek.astype("Int64")
     else:
         df["dow"] = (df[DAY] % 7).astype("Int64")
+
     _dow = df["dow"].astype(float).fillna(0.0)
-    df["dow_sin"] = np.sin(2*np.pi*_dow/7.0)
-    df["dow_cos"] = np.cos(2*np.pi*_dow/7.0)
+    df["dow_sin"] = np.sin(2 * np.pi * _dow / 7.0)
+    df["dow_cos"] = np.cos(2 * np.pi * _dow / 7.0)
     df["days_since_start"] = gb(df, ID)[DAY].transform(lambda s: s - s.min())
 
     df["U_runmean_14"] = gb(df, ID)["U_t"].transform(lambda s: s.shift(1).rolling(14, min_periods=3).mean())
@@ -166,10 +181,15 @@ def main():
     exp_mean = gb(df, ID)["U_t"].transform(lambda s: s.shift(1).expanding().mean())
     exp_std = gb(df, ID)["U_t"].transform(lambda s: s.shift(1).expanding().std())
     df["U_within_z"] = (df["U_t"] - exp_mean) / exp_std.replace(0, np.nan)
-    person_mean = gb(df, ID)["U_t"].transform("mean")
-    df["U_minus_person_mean"] = df["U_t"] - person_mean
+    person_mean_past = gb(df, ID)["U_t"].transform(lambda s: s.shift(1).expanding().mean())
+    df["U_minus_person_mean"] = df["U_t"] - person_mean_past
 
-    label_cols = [f"dY_next_h{i}" for i in range(1,15)] + [f"Y_next_h{i}" for i in range(1,15)] + ["dY_next","Ystar_next_day"]
+    label_cols = []
+    for h in range(1, H + 1):
+        label_cols.append(f"dY_next_h{h}")
+        label_cols.append(f"Y_next_h{h}")
+    label_cols += ["dY_next", "Ystar_next_day"]
+
     base_features = [
         "W_t","S_t","U_t","w_t","q_t","wq","w_t2","q_t2",
         TOTAL_SYM,SYM_COUNT,MAX_SYM,SYM_VAR,COG_MEAN,NEURO_MEAN,PAINFAT_MEAN,
@@ -191,7 +211,8 @@ def main():
         "U_runmean_14","U_runstd_14","U_within_z","U_minus_person_mean",
     ]
     base_features = [c for c in base_features if (c is not None) and (c in df.columns)]
-    ml_cols = [ID,DAY] + base_features + [c for c in label_cols if c in df.columns]
+    ml_cols = [ID, DAY] + base_features + [c for c in label_cols if c in df.columns]
+
     out_ml = args.input.replace(".csv", "_ml_ready.csv")
     df[ml_cols].to_csv(out_ml, index=False)
 
