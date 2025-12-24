@@ -36,6 +36,7 @@ try:
     from cuml.svm import SVR as cuSVR
     from cuml.neighbors import KNeighborsRegressor as cuKNN
     from cuml.linear_model import Lasso as cuLasso, ElasticNet as cuElasticNet
+    from cuml.linear_model import Ridge as cuRidge
     _HAS_CUML = True
 except Exception:
     _HAS_CUML = False
@@ -274,7 +275,7 @@ class CuMLCompatRegressor(BaseEstimator, RegressorMixin):
         )
 
 def make_pipeline_and_grid(model_name: str, use_gpu: bool):
-    from models import LassoModel, ElasticNetModel, RandomForestModel, XGBoostModel, SVRModel, KNNRegressorModel, CatBoostRegressorModel
+    from models import LassoModel, RidgeModel, ElasticNetModel, RandomForestModel, XGBoostModel, SVRModel, KNNRegressorModel, CatBoostRegressorModel
     m = model_name.lower()
     if m == "lasso":
         if use_gpu and cuml_available():
@@ -285,6 +286,24 @@ def make_pipeline_and_grid(model_name: str, use_gpu: bool):
             return pipe, grid
         pipe = LassoModel().sklearn_pipeline()
         grid = {"model__alpha": np.logspace(-5, 1, 9).tolist()}
+        return pipe, grid
+    if m == "ridge":
+        if use_gpu and cuml_available():
+            est = cuRidge()
+            pre = SkPipeline([
+                ("imputer", SimpleImputer(strategy="median")),
+                ("scaler", StandardScaler())
+            ])
+            pipe = CuMLCompatRegressor(pre, est)
+            grid = {
+                "model__alpha": np.logspace(-5, 1, 9).tolist(),
+                "model__fit_intercept": [True]
+            }
+            return pipe, grid
+        pipe = RidgeModel().sklearn_pipeline()
+        grid = {
+            "model__alpha": np.logspace(-5, 1, 9).tolist()
+        }
         return pipe, grid
     if m == "elasticnet":
         if use_gpu and cuml_available():
@@ -383,7 +402,7 @@ def run_nn_grid(X: pd.DataFrame, y: np.ndarray, cv_splits: int = 5, out_dir: str
         "lr": [1e-4, 3e-4, 1e-3],
         "weight_decay": [0.0, 1e-6, 1e-5],
         "batch_size": [32, 64, 128],
-        "epochs": [50],
+        "epochs": [100], # 100
         "patience": [10],
         "scheduler_type": ["none", "step", "cosine"],
         "scheduler_step": [10, 20],
@@ -549,7 +568,7 @@ def run_grid_search(model_name: str, X: pd.DataFrame, y: np.ndarray, groups: Opt
     )
     return summary
 
-def run_all_models(X: pd.DataFrame, y: np.ndarray, groups: Optional[np.ndarray] = None, models: List[str] = ("lasso","elasticnet","rf","svr","knn","xgb","catboost","mlp"), cv_splits: int = 5, out_dir: str = "../Data/grid_results", refit_metric: str = "r2") -> Dict[str, Dict[str, Any]]:
+def run_all_models(X: pd.DataFrame, y: np.ndarray, groups: Optional[np.ndarray] = None, models: List[str] = ("lasso", "ridge", "elasticnet","rf","svr","knn","xgb","catboost","mlp"), cv_splits: int = 5, out_dir: str = "../Data/grid_results", refit_metric: str = "r2") -> Dict[str, Dict[str, Any]]:
     results = {}
     for m in models:
         print("=" * 80)
@@ -592,7 +611,7 @@ def shap_importance_for_pipeline(pipe, X: pd.DataFrame, top_n: int = 20) -> pd.S
             return imp.sort_values(ascending=False).head(top_n)
         else:
             raise RuntimeError("Tree-like model without feature_importances_.")
-    if any(k in name for k in ["lasso", "elasticnet", "linear"]):
+    if any(k in name for k in ["lasso", "ridge", "elasticnet", "linear"]):
         bg = _bg_sample(Xp, 500)
         sv = shap.LinearExplainer(model, bg).shap_values(Xp)
     else:
