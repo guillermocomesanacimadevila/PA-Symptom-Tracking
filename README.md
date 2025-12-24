@@ -47,10 +47,8 @@ cd Scripts/ && chmod +x test.py && python test.py
 # Data prep
 
 ```bash
-python data_prep.py --input data.csv --h-max 60
+python data_prep.py --input ../Data/Symptomtrackingdata_csv-cleaned_with_vars.csv --h-max 60
 ```
-
-
 
 # Bootsraping
 
