@@ -1,5 +1,30 @@
-# PA-Symptom-Tracking
-alfie 
+# Machine learning for symptom dynamic prediction and treatment effect estimation in pernicious anaemia
+
+---
+
+[![Status](https://img.shields.io/badge/status-active-success.svg)]()
+[![Domain](https://img.shields.io/badge/domain-clinical%20ML%20%7C%20causal%20inference-blue.svg)]()
+[![Methods](https://img.shields.io/badge/methods-forecasting%20%7C%20DR--ATE-informational.svg)]()
+[![Languages](https://img.shields.io/badge/languages-Python%20%7C%20R%20%7C%20Bash-276DC3.svg)]()
+[![Python](https://img.shields.io/badge/python-%E2%89%A53.11-3776AB.svg)]()
+[![Reproducibility](https://img.shields.io/badge/reproducibility-containerised%20%7C%20deterministic-success.svg)]()
+[![Containers](https://img.shields.io/badge/containers-Docker%20%7C%20Conda-2496ED.svg)]()
+[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL2-lightgrey.svg)]()
+[![Docs](https://img.shields.io/badge/docs-auto--generated-green.svg)]()
+
+> *Time-series + Causal Machine Learning*
+
+---
+
+**Authors:**  
+> Guillermo Comesaña Cimadevila · Alfie Thain · Kourosh Ahmadi
+
+---
+
+Thain, A., Comesaña Cimadevila, G., *et al.* **Symptom-Tracking Pipeline**: Machine learning reveals symptom dynamics and treatment effects in pernicious anaemia. *GitHub repository*. https://github.com/guillermocomesanacimadevila/PA-Symptom-Tracking.
+
+---
+
 ```bash
 git clone https://github.com/guillermocomesanacimadevila/PA-Symptom-Tracking.git
 ```
@@ -53,7 +78,9 @@ python data_prep.py --input ../Data/Symptomtrackingdata_csv-cleaned_with_vars.cs
 ```bash
 python run_all_models.py \
   --data ../Data/Symptomtrackingdata_csv-cleaned_with_vars_ml_ready.csv \
-  --out_dir ../Data/grid_results_horizons \
+  --out_dir ../grid_results_horizons \
+  --target W \
+  --summarise-by patient \
   --h-max auto \
   --h-cap 9999
 ```
